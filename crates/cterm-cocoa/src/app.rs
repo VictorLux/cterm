@@ -134,8 +134,8 @@ pub fn get_args() -> &'static Args {
 
 /// Application state stored in the delegate
 pub struct AppDelegateIvars {
-    config: Config,
-    theme: Theme,
+    config: std::cell::RefCell<Config>,
+    theme: std::cell::RefCell<Theme>,
     windows: std::cell::RefCell<Vec<Retained<CtermWindow>>>,
     /// Hash of last saved crash state (to avoid redundant writes)
     #[cfg(unix)]
@@ -248,8 +248,8 @@ define_class!(
                 for (i, recovered) in recovery_fds.iter().enumerate() {
                     let window = CtermWindow::from_recovered_fd(
                         mtm,
-                        &self.ivars().config,
-                        &self.ivars().theme,
+                        &self.ivars().config.borrow(),
+                        &self.ivars().theme.borrow(),
                         recovered,
                     );
 
@@ -327,7 +327,7 @@ define_class!(
 
             // Normal startup - create the main window
             log::debug!("Creating main window...");
-            let window = CtermWindow::new(mtm, &self.ivars().config, &self.ivars().theme);
+            let window = CtermWindow::new(mtm, &self.ivars().config.borrow(), &self.ivars().theme.borrow());
             log::debug!("Main window created");
 
             // Store window reference
@@ -368,7 +368,7 @@ define_class!(
             }
 
             // Check if config says to confirm close with running processes
-            if !self.ivars().config.general.confirm_close_with_running {
+            if !self.ivars().config.borrow().general.confirm_close_with_running {
                 return NSApplicationTerminateReply::TerminateNow;
             }
 
@@ -435,9 +435,13 @@ define_class!(
         #[unsafe(method(showPreferences:))]
         fn action_show_preferences(&self, _sender: Option<&objc2::runtime::AnyObject>) {
             let mtm = MainThreadMarker::from(self);
-            let config = self.ivars().config.clone();
-            crate::preferences::show_preferences(mtm, &config, |_new_config| {
-                // Config saved - could reload theme or apply changes here
+            let config = self.ivars().config.borrow().clone();
+            let self_ptr = self as *const AppDelegate;
+            crate::preferences::show_preferences(mtm, &config, move |new_config| {
+                // Update cached config and theme so subsequent windows/dialogs use the new values
+                let delegate = unsafe { &*self_ptr };
+                *delegate.ivars().config.borrow_mut() = new_config.clone();
+                *delegate.ivars().theme.borrow_mut() = get_theme(&new_config);
                 log::info!("Preferences saved");
             });
         }
@@ -476,6 +480,12 @@ define_class!(
             use objc2_app_kit::NSMenuItem;
 
             if let Some(sender) = sender {
+                // Validate sender is actually an NSMenuItem before casting
+                let is_menu_item: bool =
+                    unsafe { msg_send![sender, isKindOfClass: objc2::class!(NSMenuItem)] };
+                if !is_menu_item {
+                    return;
+                }
                 // Get the menu item's tag which is the template index
                 let item: &NSMenuItem = unsafe { &*(sender as *const _ as *const NSMenuItem) };
                 let index = item.tag() as usize;
@@ -493,6 +503,12 @@ define_class!(
             use objc2_app_kit::NSMenuItem;
 
             if let Some(sender) = sender {
+                // Validate sender is actually an NSMenuItem before casting
+                let is_menu_item: bool =
+                    unsafe { msg_send![sender, isKindOfClass: objc2::class!(NSMenuItem)] };
+                if !is_menu_item {
+                    return;
+                }
                 let item: &NSMenuItem = unsafe { &*(sender as *const _ as *const NSMenuItem) };
                 let index = item.tag() as usize;
 
@@ -558,7 +574,7 @@ define_class!(
             use objc2_app_kit::NSWindowTabbingMode;
 
             let mtm = MainThreadMarker::from(self);
-            let window = CtermWindow::new(mtm, &self.ivars().config, &self.ivars().theme);
+            let window = CtermWindow::new(mtm, &self.ivars().config.borrow(), &self.ivars().theme.borrow());
 
             // Temporarily disable tabbing to force a new window instead of a tab
             window.setTabbingMode(NSWindowTabbingMode::Disallowed);
@@ -628,6 +644,13 @@ define_class!(
                     for offset in 1..count {
                         let idx = (current_index + offset) % count;
                         if let Some(window) = windows.iter().nth(idx) {
+                            // Verify this is a CtermWindow before casting
+                            let is_cterm: bool = unsafe {
+                                msg_send![&*window, isKindOfClass: objc2::class!(CtermWindow)]
+                            };
+                            if !is_cterm {
+                                continue;
+                            }
                             let window_ptr =
                                 objc2::rc::Retained::as_ptr(&window) as *const CtermWindow;
                             let cterm_window: &CtermWindow = unsafe { &*window_ptr };
@@ -797,8 +820,8 @@ impl AppDelegate {
     pub fn new(mtm: MainThreadMarker, config: Config, theme: Theme) -> Retained<Self> {
         let this = mtm.alloc::<Self>();
         let this = this.set_ivars(AppDelegateIvars {
-            config,
-            theme,
+            config: std::cell::RefCell::new(config),
+            theme: std::cell::RefCell::new(theme),
             windows: std::cell::RefCell::new(Vec::new()),
             #[cfg(unix)]
             last_state_hash: std::cell::Cell::new(0),
@@ -860,8 +883,12 @@ impl AppDelegate {
         }
 
         // Create a new tab from the template
-        let window =
-            CtermWindow::from_template(mtm, &self.ivars().config, &self.ivars().theme, template);
+        let window = CtermWindow::from_template(
+            mtm,
+            &self.ivars().config.borrow(),
+            &self.ivars().theme.borrow(),
+            template,
+        );
         self.ivars().windows.borrow_mut().push(window.clone());
 
         // If there's a key window, add as a tab to it; otherwise show standalone
@@ -936,7 +963,7 @@ impl AppDelegate {
                 // Reconstruct Screen from the terminal state
                 let term_state = &tab_state.terminal;
                 let screen_config = ScreenConfig {
-                    scrollback_lines: self.ivars().config.general.scrollback_lines,
+                    scrollback_lines: self.ivars().config.borrow().general.scrollback_lines,
                 };
 
                 let screen = Screen::from_upgrade_state(
@@ -961,8 +988,8 @@ impl AppDelegate {
                 // Create the window with the restored terminal
                 let window = CtermWindow::from_restored(
                     mtm,
-                    &self.ivars().config,
-                    &self.ivars().theme,
+                    &self.ivars().config.borrow(),
+                    &self.ivars().theme.borrow(),
                     terminal,
                     tab_state.color.clone(),
                 );
@@ -1306,15 +1333,39 @@ pub fn run() {
     // Initialize logging with capture buffer for in-app log viewing
     crate::log_capture::init();
 
-    // Install signal handler for better crash debugging
+    // Install signal handler for crash notification
+    // SAFETY: Only async-signal-safe operations (write, abort) are used in the handler.
     #[cfg(unix)]
     unsafe {
-        use std::io::Write;
         extern "C" fn crash_handler(sig: libc::c_int) {
-            let _ = writeln!(std::io::stderr(), "\n=== CRASH: Signal {} ===", sig);
-            let bt = std::backtrace::Backtrace::force_capture();
-            let _ = writeln!(std::io::stderr(), "{}", bt);
-            std::process::abort();
+            // Only use async-signal-safe operations here.
+            // write() and abort() are async-signal-safe per POSIX.
+            unsafe {
+                let msg = b"\n=== CRASH: Signal ";
+                libc::write(
+                    libc::STDERR_FILENO,
+                    msg.as_ptr() as *const libc::c_void,
+                    msg.len(),
+                );
+                // Write signal number as ASCII digits
+                let sig_bytes: &[u8] = match sig {
+                    11 => b"11 (SIGSEGV)",
+                    10 => b"10 (SIGBUS)",
+                    _ => b"?",
+                };
+                libc::write(
+                    libc::STDERR_FILENO,
+                    sig_bytes.as_ptr() as *const libc::c_void,
+                    sig_bytes.len(),
+                );
+                let trailer = b" ===\n";
+                libc::write(
+                    libc::STDERR_FILENO,
+                    trailer.as_ptr() as *const libc::c_void,
+                    trailer.len(),
+                );
+                libc::abort();
+            }
         }
         // Cast to function pointer type first, then to sighandler_t
         let handler: extern "C" fn(libc::c_int) = crash_handler;

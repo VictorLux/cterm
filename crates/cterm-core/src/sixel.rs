@@ -3,6 +3,9 @@
 //! Implements the DEC Sixel graphics protocol for inline bitmap images.
 //! Sixel is a format where each character (63-126) represents 6 vertical pixels.
 
+/// Maximum total pixels to prevent memory exhaustion (16 million pixels = ~64MB RGBA)
+const MAX_SIXEL_PIXELS: usize = 16 * 1024 * 1024;
+
 /// Decoded sixel image as RGBA pixels
 #[derive(Debug, Clone)]
 pub struct SixelImage {
@@ -385,14 +388,34 @@ impl SixelDecoder {
             let new_width = width.max(current_width);
             let new_height = height.max(current_height);
 
+            // Check for overflow and enforce pixel budget
+            let total_pixels = match new_width.checked_mul(new_height) {
+                Some(p) if p <= MAX_SIXEL_PIXELS => p,
+                _ => {
+                    log::warn!(
+                        "Sixel image too large: {}x{} exceeds pixel budget",
+                        new_width,
+                        new_height
+                    );
+                    return;
+                }
+            };
+            let buf_size = match total_pixels.checked_mul(4) {
+                Some(s) => s,
+                None => {
+                    log::warn!("Sixel buffer size overflow");
+                    return;
+                }
+            };
+
             // Create new buffer
             let mut new_pixels = if self.transparent_bg {
-                vec![0u8; new_width * new_height * 4]
+                vec![0u8; buf_size]
             } else {
                 // Fill with background color (color 0)
                 let bg = self.palette[0];
-                let mut buf = Vec::with_capacity(new_width * new_height * 4);
-                for _ in 0..(new_width * new_height) {
+                let mut buf = Vec::with_capacity(buf_size);
+                for _ in 0..total_pixels {
                     buf.extend_from_slice(&bg);
                 }
                 buf

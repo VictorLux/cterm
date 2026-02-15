@@ -448,17 +448,29 @@ mod unix {
 
             // Change to the working directory if specified
             if let Some(ref cwd) = config.cwd {
-                if let Ok(cwd_cstring) = CString::new(cwd.to_string_lossy().as_bytes()) {
-                    libc::chdir(cwd_cstring.as_ptr());
+                match CString::new(cwd.to_string_lossy().as_bytes()) {
+                    Ok(cwd_cstring) => {
+                        libc::chdir(cwd_cstring.as_ptr());
+                    }
+                    Err(_) => {
+                        // Null byte in path - log to stderr (post-fork, can't use logger)
+                        let msg = b"cterm: warning: null byte in working directory path\n";
+                        libc::write(libc::STDERR_FILENO, msg.as_ptr() as *const _, msg.len());
+                    }
                 }
             }
 
             // Set environment variables
             for (key, value) in &config.env {
-                if let (Ok(key_c), Ok(value_c)) =
-                    (CString::new(key.as_str()), CString::new(value.as_str()))
-                {
-                    libc::setenv(key_c.as_ptr(), value_c.as_ptr(), 1);
+                match (CString::new(key.as_str()), CString::new(value.as_str())) {
+                    (Ok(key_c), Ok(value_c)) => {
+                        libc::setenv(key_c.as_ptr(), value_c.as_ptr(), 1);
+                    }
+                    _ => {
+                        // Null byte in env var - log to stderr (post-fork, can't use logger)
+                        let msg = b"cterm: warning: null byte in environment variable\n";
+                        libc::write(libc::STDERR_FILENO, msg.as_ptr() as *const _, msg.len());
+                    }
                 }
             }
 

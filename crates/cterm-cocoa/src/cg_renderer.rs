@@ -396,10 +396,7 @@ impl CGRenderer {
     }
 
     fn draw_cell_background_sized(&self, x: f64, y: f64, width: f64, rgb: &Rgb) {
-        let rect = NSRect::new(
-            NSPoint::new(x, y),
-            NSSize::new(width, self.cell_height),
-        );
+        let rect = NSRect::new(NSPoint::new(x, y), NSSize::new(width, self.cell_height));
         unsafe {
             let ns_color = Self::ns_color(rgb.r, rgb.g, rgb.b);
             let _: () = msg_send![&*ns_color, setFill];

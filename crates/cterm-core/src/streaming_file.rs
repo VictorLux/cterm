@@ -250,8 +250,11 @@ impl StreamingFileReceiver {
     pub fn finish(mut self) -> Result<StreamingFileResult, String> {
         // Decode any remaining base64 data
         if !self.base64_buffer.is_empty() {
-            // Pad with '=' if needed for final chunk
-            while !self.base64_buffer.len().is_multiple_of(4) {
+            // Pad with '=' if needed for final chunk (at most 3 padding chars)
+            for _ in 0..3 {
+                if self.base64_buffer.len() % 4 == 0 {
+                    break;
+                }
                 self.base64_buffer.push(b'=');
             }
             if !self.decode_chunk() {

@@ -29,6 +29,12 @@ pub enum UpdateError {
     #[error("Checksum verification failed")]
     ChecksumMismatch,
 
+    #[error("No checksum file available for this release")]
+    ChecksumMissing,
+
+    #[error("Download URL does not match trusted domain: {0}")]
+    UntrustedUrl(String),
+
     #[error("No suitable release asset found for this platform")]
     NoAssetFound,
 
@@ -188,6 +194,11 @@ impl Updater {
                     .as_str()
                     .ok_or(UpdateError::NoAssetFound)?
                     .to_string();
+
+                // Validate that asset URL points to the expected GitHub domain
+                if !url.starts_with("https://github.com/") {
+                    return Err(UpdateError::UntrustedUrl(url));
+                }
 
                 let size = asset["size"].as_u64().unwrap_or(0);
 
@@ -379,6 +390,14 @@ impl Updater {
             // Move to trash or backup instead of deleting
             let backup_path = target_app.with_extension("app.backup");
             if backup_path.exists() {
+                // Check for symlink attack before removing
+                let meta = std::fs::symlink_metadata(&backup_path)?;
+                if meta.is_symlink() {
+                    return Err(UpdateError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Backup path is a symlink, refusing to remove",
+                    )));
+                }
                 std::fs::remove_dir_all(&backup_path)?;
             }
             std::fs::rename(&target_app, &backup_path)?;
@@ -404,7 +423,7 @@ impl Updater {
     pub async fn verify(&self, file_path: &Path, info: &UpdateInfo) -> Result<bool, UpdateError> {
         let checksum_url = match &info.checksum_url {
             Some(url) => url,
-            None => return Ok(false), // No checksum available
+            None => return Err(UpdateError::ChecksumMissing),
         };
 
         // Download checksum file

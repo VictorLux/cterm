@@ -69,6 +69,15 @@ pub fn write_crash_state(state: &CrashState) -> io::Result<()> {
     // Write atomically using temp file + rename
     let temp_path = path.with_extension("tmp");
     fs::write(&temp_path, &bytes)?;
+
+    // Set restrictive permissions (crash state may contain scrollback with secrets)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&temp_path, perms)?;
+    }
+
     fs::rename(&temp_path, &path)?;
 
     log::trace!("Wrote crash state: {} bytes", bytes.len());
@@ -98,6 +107,12 @@ pub fn read_crash_state() -> io::Result<CrashState> {
 pub fn clear_crash_state() -> io::Result<()> {
     let path = crash_state_path();
     if path.exists() {
+        // Check for symlink to prevent targeted file deletion
+        let meta = fs::symlink_metadata(&path)?;
+        if meta.is_symlink() {
+            log::warn!("Crash state path is a symlink, refusing to remove");
+            return Ok(());
+        }
         fs::remove_file(&path)?;
     }
     Ok(())
@@ -110,6 +125,14 @@ pub fn write_crash_marker(signal: i32) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     fs::write(&path, format!("{}\n{}", signal, std::process::id()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = fs::set_permissions(&path, perms);
+    }
+
     Ok(())
 }
 
@@ -118,6 +141,14 @@ pub fn read_crash_marker() -> Option<(i32, u32)> {
     let path = crash_marker_path();
     if !path.exists() {
         return None;
+    }
+
+    // Check for symlink before reading/removing
+    if let Ok(meta) = fs::symlink_metadata(&path) {
+        if meta.is_symlink() {
+            log::warn!("Crash marker path is a symlink, ignoring");
+            return None;
+        }
     }
 
     let content = fs::read_to_string(&path).ok()?;

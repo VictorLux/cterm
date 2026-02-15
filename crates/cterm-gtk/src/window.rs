@@ -430,6 +430,13 @@ impl CtermWindow {
                     let notebook_paste = notebook.clone();
                     clipboard.read_text_async(None::<&gio::Cancellable>, move |result| {
                         if let Ok(Some(text)) = result {
+                            // Warn on very large clipboard pastes (> 1 MB)
+                            if text.len() > 1_048_576 {
+                                log::warn!(
+                                    "Large clipboard paste: {} bytes (may flood terminal)",
+                                    text.len()
+                                );
+                            }
                             if let Some(page_idx) = notebook_paste.current_page() {
                                 let tabs = tabs_paste.borrow();
                                 if let Some(tab) = tabs.get(page_idx as usize) {

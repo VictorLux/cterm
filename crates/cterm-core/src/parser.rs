@@ -53,6 +53,9 @@ enum Osc1337State {
     Osc1337Data(StreamingFileReceiver),
 }
 
+/// Maximum size for OSC 1337 content/params buffers to prevent memory exhaustion (16 MB)
+const MAX_OSC_1337_SIZE: usize = 16 * 1024 * 1024;
+
 /// Parser wraps the vte parser and applies actions to a Screen
 pub struct Parser {
     state_machine: vte::Parser,
@@ -162,6 +165,13 @@ impl Parser {
                     return true;
                 }
 
+                // Enforce buffer size limit to prevent memory exhaustion
+                if content.len() >= MAX_OSC_1337_SIZE {
+                    log::warn!("OSC 1337 content exceeds maximum size, discarding");
+                    self.osc_1337_state = Osc1337State::None;
+                    return false;
+                }
+
                 // Check if this starts "File="
                 const FILE_PREFIX: &[u8] = b"File=";
                 if content.len() < FILE_PREFIX.len()
@@ -186,6 +196,13 @@ impl Parser {
                     // Terminator without data - will be handled by check_osc_1337_finish
                     self.osc_1337_terminated = true;
                     return true;
+                }
+
+                // Enforce buffer size limit to prevent memory exhaustion
+                if params.len() >= MAX_OSC_1337_SIZE {
+                    log::warn!("OSC 1337 params exceeds maximum size, discarding");
+                    self.osc_1337_state = Osc1337State::None;
+                    return false;
                 }
 
                 if byte == b':' {

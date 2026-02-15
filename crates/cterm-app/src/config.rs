@@ -901,7 +901,15 @@ pub fn save_config(config: &Config) -> Result<(), ConfigError> {
 
     let path = dir.join("config.toml");
     let content = toml::to_string_pretty(config)?;
-    std::fs::write(&path, content)?;
+    std::fs::write(&path, &content)?;
+
+    // Set restrictive permissions on config file
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = std::fs::set_permissions(&path, perms);
+    }
 
     Ok(())
 }
@@ -943,7 +951,14 @@ pub fn save_sticky_tabs(tabs: &[StickyTabConfig]) -> Result<(), ConfigError> {
 
     let file = StickyTabsFile { tabs };
     let content = toml::to_string_pretty(&file)?;
-    std::fs::write(&path, content)?;
+    std::fs::write(&path, &content)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = std::fs::set_permissions(&path, perms);
+    }
 
     Ok(())
 }
@@ -1133,7 +1148,14 @@ pub fn save_tool_shortcuts(tools: &[ToolShortcutEntry]) -> Result<(), ConfigErro
 
     let file = ToolShortcutsFile { tools };
     let content = toml::to_string_pretty(&file)?;
-    std::fs::write(&path, content)?;
+    std::fs::write(&path, &content)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = std::fs::set_permissions(&path, perms);
+    }
 
     Ok(())
 }

@@ -167,9 +167,25 @@ pub enum InitResult {
     UpdatedRemote,
 }
 
+/// Validate that a remote URL uses a known safe protocol
+fn validate_remote_url(url: &str) -> Result<(), GitError> {
+    let is_valid = url.starts_with("https://")
+        || url.starts_with("ssh://")
+        || url.starts_with("git@")
+        || url.starts_with("file://");
+    if !is_valid {
+        return Err(GitError::CommandFailed(format!(
+            "Remote URL uses unsupported protocol: {}",
+            url
+        )));
+    }
+    Ok(())
+}
+
 /// Initialize git repo and set remote.
 /// Returns `InitResult::PulledRemote` if remote content was pulled and config should be reloaded.
 pub fn init_with_remote(config_dir: &Path, remote_url: &str) -> Result<InitResult, GitError> {
+    validate_remote_url(remote_url)?;
     let was_repo = is_git_repo(config_dir);
     let had_commits = was_repo && run_git(config_dir, &["rev-parse", "HEAD"]).is_ok();
 
@@ -333,6 +349,14 @@ fn resolve_conflicts_by_taking_remote(
 ) -> Result<Vec<String>, GitError> {
     let mut resolved_files = Vec::new();
 
+    // Create backup of local config before hard reset
+    let backup_dir = config_dir.join(".cterm-config-backup");
+    if let Err(e) = backup_config_files(config_dir, &backup_dir) {
+        log::warn!("Failed to create backup before conflict resolution: {}", e);
+    } else {
+        log::info!("Created config backup at {}", backup_dir.display());
+    }
+
     // Hard reset to remote branch
     let remote_ref = format!("origin/{}", branch);
     run_git(config_dir, &["reset", "--hard", &remote_ref])?;
@@ -341,6 +365,31 @@ fn resolve_conflicts_by_taking_remote(
     resolved_files.push(format!("Reset to {}", remote_ref));
 
     Ok(resolved_files)
+}
+
+/// Back up config files (*.toml) before a destructive operation
+fn backup_config_files(config_dir: &Path, backup_dir: &Path) -> Result<(), GitError> {
+    use std::fs;
+
+    if backup_dir.exists() {
+        fs::remove_dir_all(backup_dir).map_err(io_err)?;
+    }
+    fs::create_dir_all(backup_dir).map_err(io_err)?;
+
+    // Copy all .toml files
+    if let Ok(entries) = fs::read_dir(config_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "toml") {
+                if let Some(name) = path.file_name() {
+                    let dest = backup_dir.join(name);
+                    let _ = fs::copy(&path, &dest);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Commit and push all changes
@@ -405,6 +454,8 @@ pub fn clone_repo(remote_url: &str, target_dir: &Path) -> Result<(), GitError> {
             log::info!("Created parent directory: {}", parent.display());
         }
     }
+
+    validate_remote_url(remote_url)?;
 
     // Clone the repository
     let output = Command::new("git")

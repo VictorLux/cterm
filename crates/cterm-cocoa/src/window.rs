@@ -446,13 +446,17 @@ impl CtermWindow {
         let mtm = MainThreadMarker::from(self);
         let app = NSApplication::sharedApplication(mtm);
         if let Some(delegate) = app.delegate() {
-            // Cast to our AppDelegate type via raw pointer
-            let delegate_ptr = Retained::as_ptr(&delegate) as *const crate::app::AppDelegate;
-            let app_delegate: &crate::app::AppDelegate = unsafe { &*delegate_ptr };
-            if active {
-                app_delegate.increment_bell_count();
-            } else {
-                app_delegate.decrement_bell_count();
+            // Validate delegate type before casting
+            let is_app_delegate: bool =
+                unsafe { msg_send![&*delegate, isKindOfClass: objc2::class!(CtermAppDelegate)] };
+            if is_app_delegate {
+                let delegate_ptr = Retained::as_ptr(&delegate) as *const crate::app::AppDelegate;
+                let app_delegate: &crate::app::AppDelegate = unsafe { &*delegate_ptr };
+                if active {
+                    app_delegate.increment_bell_count();
+                } else {
+                    app_delegate.decrement_bell_count();
+                }
             }
         }
     }
@@ -533,7 +537,12 @@ impl CtermWindow {
 
         if let Some(windows) = tabbed_windows {
             for window in windows.iter() {
-                // Try to cast to CtermWindow and check for custom title
+                // Verify this is a CtermWindow before casting
+                let is_cterm: bool =
+                    unsafe { msg_send![&*window, isKindOfClass: objc2::class!(CtermWindow)] };
+                if !is_cterm {
+                    continue;
+                }
                 let window_ptr = Retained::as_ptr(&window) as *const CtermWindow;
                 let cterm_window: &CtermWindow = unsafe { &*window_ptr };
 

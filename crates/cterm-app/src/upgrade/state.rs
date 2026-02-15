@@ -243,14 +243,29 @@ impl TerminalUpgradeState {
         if self.scrollback.is_empty() {
             return Ok(());
         }
+        // Use timestamp nonce to make path less predictable (mitigates symlink races)
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
         let path = std::env::temp_dir().join(format!(
-            "cterm_scrollback_{}_{}.bin",
+            "cterm_scrollback_{}_{}_{:x}.bin",
             std::process::id(),
-            index
+            index,
+            nonce
         ));
         let file = std::fs::File::create(&path)?;
         bincode::serialize_into(std::io::BufWriter::new(file), &self.scrollback)
             .map_err(io::Error::other)?;
+
+        // Set restrictive permissions on scrollback file (may contain secrets)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+
         self.scrollback_file = Some(path.to_string_lossy().into_owned());
         self.scrollback = Vec::new();
         Ok(())
